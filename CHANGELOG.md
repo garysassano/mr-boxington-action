@@ -1,6 +1,15 @@
 # Changelog
 
 ---
+## [1.4.1](https://github.com/jdx/mr-boxington-action/compare/v1.4.0..v1.4.1) - 2026-09-21
+
+### ⚙️ Miscellaneous Tasks
+
+- **(deps-dev)** bump @types/node from 26.5.1 to 26.6.1 (#44) by [@dependabot[bot]](https://github.com/dependabot[bot]) in [#44](https://github.com/jdx/mr-boxington-action/pull/44)
+- **(deps-dev)** bump vitest from 5.0.0 to 5.0.1 (#45) by [@dependabot[bot]](https://github.com/dependabot[bot]) in [#45](https://github.com/jdx/mr-boxington-action/pull/45)
+- add entire trail runners (#42) by [@jdx](https://github.com/jdx) in [#42](https://github.com/jdx/mr-boxington-action/pull/42)
+
+---
 ## [1.4.0](https://github.com/jdx/mr-boxington-action/compare/v1.3.1..v1.4.0) - 2026-09-16
 
 ### 🚀 Features
