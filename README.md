@@ -130,6 +130,18 @@ fresh:
     cache-generation: v2
 ```
 
+When the Cargo workspace is not at the checkout root, point `working-directory`
+at it so the `target` payload caches that workspace's `target/` and prunes it
+against its own `cargo metadata`:
+
+```yaml
+- uses: jdx/mr-boxington-action@v1
+  with:
+    working-directory: rust
+- run: mbx test --workspace
+  working-directory: rust
+```
+
 `cache-key` and newline-separated `restore-keys` are available when the default
 `${platform}-${architecture}-mbx-${generation}-${toolchain}-${commit}` layout
 is not enough.
@@ -181,6 +193,7 @@ own authorization policy.
 | `github-cache-mode`         | `target`              | GitHub payload: warm Cargo `target` tree or portable mbx `objects`             |
 | `save-on-workflow-dispatch` | `false`               | Save after a successful trusted `workflow_dispatch` run                        |
 | `toolchain`                 |                       | Toolchain the build names, such as `1.91` or `+1.91`; the cache key follows it |
+| `working-directory`         | `.`                   | Cargo workspace whose `target/` the `target` payload caches                    |
 | `cache-links`               | `auto`                | Cache native links; automatically enabled on Linux                             |
 | `cache-key`                 | generated             | Complete GitHub cache primary key                                              |
 | `restore-keys`              | generated             | Newline-separated GitHub restore prefixes                                      |

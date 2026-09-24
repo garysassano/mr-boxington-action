@@ -80,6 +80,9 @@ jobs:
           # Its own generation, so a smoke test never saves over a key a real
           # build would restore.
           cache-generation: target-default-ci
+          # The fixture workspace sits below the checkout root, so the payload
+          # must follow it rather than the root's (absent) target directory.
+          working-directory: .github/e2e/fixture
       - run: mbx --version
       - name: Check the default payload is the target tree
         env:

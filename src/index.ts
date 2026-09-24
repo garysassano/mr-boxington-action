@@ -4,7 +4,7 @@ import * as exec from '@actions/exec'
 import {context} from '@actions/github'
 import * as tc from '@actions/tool-cache'
 import {createHash, randomUUID} from 'node:crypto'
-import {access, chmod, copyFile, mkdir, readFile} from 'node:fs/promises'
+import {access, chmod, copyFile, mkdir, readFile, stat} from 'node:fs/promises'
 import {constants} from 'node:fs'
 import {homedir} from 'node:os'
 import path from 'node:path'
@@ -15,6 +15,7 @@ import {
   canReuseCachedMbx,
   callingCard,
   type CallingCardRow,
+  cargoTargetDirectory,
   generatedKey,
   generatedRestoreKey,
   githubCacheGeneration,
@@ -51,6 +52,7 @@ const CACHE_ARCHIVE_STATE = 'mbx-cache-archive'
 const CACHE_EXPORT_GROUP_STATE = 'mbx-cache-export-group'
 const CACHE_PATHS_STATE = 'mbx-cache-paths'
 const CACHE_BUNDLE_FORM_STATE = 'mbx-cache-bundle-form'
+const CARGO_WORKSPACE_STATE = 'mbx-cargo-workspace'
 const MBX_STATE = 'mbx-bin'
 const CACHE_ARCHIVE_NAME = 'github-actions-cache-v1.tar'
 // A directory rather than a tar. `actions/cache` archives whatever path it is
@@ -77,14 +79,23 @@ async function leaveCallingCard(note: string, rows: CallingCardRow[]): Promise<v
   }
 }
 
-async function capture(command: string, args: string[]): Promise<string> {
+async function capture(command: string, args: string[], cwd?: string): Promise<string> {
   let output = ''
   const exitCode = await exec.exec(command, args, {
+    cwd,
     silent: true,
     listeners: {stdout: data => (output += data.toString())}
   })
   if (exitCode !== 0) throw new Error(`${command} exited with code ${exitCode}`)
   return output.trim()
+}
+
+async function isDirectory(directory: string): Promise<boolean> {
+  try {
+    return (await stat(directory)).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -373,8 +384,13 @@ async function main(): Promise<void> {
     process.env.RUNNER_TEMP || path.join(homedir(), '.cache'),
     TARGET_TOOL_DIRECTORY
   )
+  const targetDirectory = cargoTargetDirectory(core.getInput('working-directory'))
+  const cargoWorkspace = path.dirname(targetDirectory)
+  if (targetCache && !(await isDirectory(cargoWorkspace))) {
+    throw new Error(`working-directory ${JSON.stringify(cargoWorkspace)} is not a directory`)
+  }
   const targetPaths = [
-    path.resolve('target'),
+    targetDirectory,
     path.join(cargoHome, 'registry'),
     path.join(cargoHome, 'git'),
     targetToolDirectory
@@ -395,7 +411,7 @@ async function main(): Promise<void> {
   if (restoredKey && githubCacheMode === 'objects') {
     await exec.exec(installed.bin, ['cache', 'import', cacheArchive])
   } else if (restoredKey && githubCacheMode === 'target') {
-    const hydrated = await hydrateMbxShimBinaries(path.resolve('target'), installed.bin)
+    const hydrated = await hydrateMbxShimBinaries(targetDirectory, installed.bin)
     if (hydrated > 0) core.info(`Restored ${hydrated} mbx build-script shim binaries`)
   }
   const hit = restoredKey === primaryKey
@@ -407,6 +423,7 @@ async function main(): Promise<void> {
   core.saveState(CACHE_BUNDLE_FORM_STATE, bundleForm)
   core.saveState(CACHE_EXPORT_GROUP_STATE, exportGroup)
   core.saveState(CACHE_PATHS_STATE, JSON.stringify(cachePaths))
+  core.saveState(CARGO_WORKSPACE_STATE, cargoWorkspace)
   core.saveState(CACHE_KEY_STATE, primaryKey)
   core.saveState(CACHE_HIT_STATE, hit ? 'true' : 'false')
   const defaultBranch = (context.payload.repository as {default_branch?: string} | undefined)
@@ -457,14 +474,16 @@ async function post(): Promise<void> {
   const group = core.getState(CACHE_EXPORT_GROUP_STATE)
   const paths = JSON.parse(core.getState(CACHE_PATHS_STATE)) as string[]
   if (!group) {
-    if (!(await hasReusableCargoTarget(path.resolve('target')))) {
+    const cargoWorkspace = core.getState(CARGO_WORKSPACE_STATE) || process.cwd()
+    const targetDirectory = path.join(cargoWorkspace, 'target')
+    if (!(await hasReusableCargoTarget(targetDirectory))) {
       core.info('No reusable Cargo target state was produced; not saving a registry-only cache')
       return
     }
-    const metadata = await capture('cargo', ['metadata', '--format-version', '1'])
+    const metadata = await capture('cargo', ['metadata', '--format-version', '1'], cargoWorkspace)
     const cargoHome = process.env.CARGO_HOME || path.join(homedir(), '.cargo')
-    await pruneCargoTargetCache(path.resolve('target'), cargoHome, metadata)
-    const dehydrated = await dehydrateMbxShimBinaries(path.resolve('target'))
+    await pruneCargoTargetCache(targetDirectory, cargoHome, metadata)
+    const dehydrated = await dehydrateMbxShimBinaries(targetDirectory)
     if (dehydrated > 0) core.info(`Omitted ${dehydrated} mbx build-script shim binaries`)
     const cacheId = await cache.saveCache(paths, primaryKey)
     core.info(`Saved mbx target cache ${primaryKey} (ID ${cacheId})`)

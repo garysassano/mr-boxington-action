@@ -1,9 +1,11 @@
+import path from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {
   cacheLinksValue,
   cacheRevision,
   canReuseCachedMbx,
   callingCard,
+  cargoTargetDirectory,
   generatedKey,
   generatedRestoreKey,
   githubCacheGeneration,
@@ -316,5 +318,19 @@ describe('object cache GC policy', () => {
     expect(githubObjectGcDefault('github', 'target', env)).toBeUndefined()
     expect(githubObjectGcDefault('local', 'objects', env)).toBeUndefined()
     expect(githubObjectGcDefault('server', 'objects', env)).toBeUndefined()
+  })
+})
+
+describe('cargo target directory', () => {
+  it('defaults to target at the job working directory', () => {
+    expect(cargoTargetDirectory('', '/work')).toBe(path.resolve('/work', 'target'))
+    expect(cargoTargetDirectory('  ', '/work')).toBe(path.resolve('/work', 'target'))
+    expect(cargoTargetDirectory('.', '/work')).toBe(path.resolve('/work', 'target'))
+  })
+
+  it('follows a workspace below or outside the checkout', () => {
+    expect(cargoTargetDirectory('rust', '/work')).toBe(path.resolve('/work', 'rust', 'target'))
+    expect(cargoTargetDirectory('rust/', '/work')).toBe(path.resolve('/work', 'rust', 'target'))
+    expect(cargoTargetDirectory('/elsewhere/ws', '/work')).toBe(path.resolve('/elsewhere/ws', 'target'))
   })
 })

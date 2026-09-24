@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import path from 'node:path'
 
 export type Backend = 'local' | 'github' | 'server'
 export type GithubCacheMode = 'objects' | 'target'
@@ -290,4 +291,13 @@ export function shouldSave(
       defaultBranch &&
       ref === `refs/heads/${defaultBranch}`
   )
+}
+
+/**
+ * The Cargo target tree the `target` payload transports: `target` beside the
+ * workspace named by `working-directory`, resolved against the job's working
+ * directory so a workspace below the checkout root is found.
+ */
+export function cargoTargetDirectory(workingDirectory: string, cwd = process.cwd()): string {
+  return path.resolve(cwd, workingDirectory.trim() || '.', 'target')
 }
