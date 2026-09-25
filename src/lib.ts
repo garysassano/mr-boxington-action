@@ -188,6 +188,78 @@ export function generatedRestoreKey(
 }
 
 /**
+ * Prefix of every cache layer a pull request saves on one base commit.
+ *
+ * A layer holds only what its baseline bundle lacks, so it is useless without
+ * that baseline. The base commit narrows the search to layers cut against the
+ * default branch's current entry, and `layerKey` then names the exact baseline
+ * bundle, which `layerBaseline` reads back to check a restored layer fits.
+ */
+export function layerRestoreKey(
+  os: string,
+  arch: string,
+  generation: string,
+  toolchain: string,
+  baseSha: string
+): string {
+  return `${os}-${arch}-mbx-${generation}-layer-${toolchain}-${baseSha}-`
+}
+
+/** A run-unique key for a layer cut against the baseline named by `baseline`. */
+export function layerKey(
+  prefix: string,
+  baseline: string,
+  runId: number,
+  runAttempt: number
+): string {
+  return `${prefix}${baseline}-run-${runId}-${runAttempt}`
+}
+
+/** The baseline identity a restored layer's key was saved with. */
+export function layerBaseline(key: string, prefix: string): string | undefined {
+  if (!key.startsWith(prefix)) return undefined
+  return /^([0-9a-f]{16}|none)-run-\d+-\d+$/.exec(key.slice(prefix.length))?.[1]
+}
+
+/**
+ * Identity of a restored baseline bundle: a digest of its manifest, which
+ * names every action and attachment the bundle carries, or `none` when no
+ * baseline was restored and a layer therefore has to stand alone.
+ */
+export function baselineIdentity(manifest: Uint8Array | undefined): string {
+  if (!manifest) return 'none'
+  return createHash('sha256').update(manifest).digest('hex').slice(0, 16)
+}
+
+export interface LayerContext {
+  save: boolean
+  eventName: string
+  mode: GithubCacheMode
+  bundle: BundleForm
+  /** The caller set `cache-key` or `restore-keys`. */
+  customKeys: boolean
+}
+
+/**
+ * Whether a pull request saves a layer over the default branch's baseline
+ * instead of a complete closure.
+ *
+ * Only a directory bundle can be layered: its objects are separate files named
+ * by digest, so the action can leave out the ones the baseline carries and put
+ * them back before import. Caller-supplied keys keep the single-entry layout
+ * they were written for.
+ */
+export function usesPullRequestLayers(run: LayerContext): boolean {
+  return (
+    run.save &&
+    run.eventName === 'pull_request' &&
+    run.mode === 'objects' &&
+    run.bundle === 'directory' &&
+    !run.customKeys
+  )
+}
+
+/**
  * Whether an installed mbx can read and write directory-form bundles.
  *
  * `mbx cache export --format directory` arrived in mbx 1.12.0, and an older

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {
+  baselineIdentity,
   cacheLinksValue,
   cacheRevision,
   canReuseCachedMbx,
@@ -13,6 +14,9 @@ import {
   githubApiHeaders,
   githubTokenValue,
   isEmptyExport,
+  layerBaseline,
+  layerKey,
+  layerRestoreKey,
   mbxReleaseToInstall,
   normalizedVersion,
   parseBackend,
@@ -26,6 +30,7 @@ import {
   savePolicy,
   supportsDirectoryBundle,
   toolchainSegment,
+  usesPullRequestLayers,
   verifiedReleaseAsset
 } from '../src/lib.js'
 
@@ -402,5 +407,56 @@ describe('cargo target directory', () => {
     expect(cargoTargetDirectory('rust', '/work')).toBe(path.resolve('/work', 'rust', 'target'))
     expect(cargoTargetDirectory('rust/', '/work')).toBe(path.resolve('/work', 'rust', 'target'))
     expect(cargoTargetDirectory('/elsewhere/ws', '/work')).toBe(path.resolve('/elsewhere/ws', 'target'))
+  })
+})
+
+describe('pull request cache layers', () => {
+  const prefix = layerRestoreKey('linux', 'x64', 'v1-dir', 'rust-0123456789ab', 'base')
+
+  it('keys a layer by its base commit and the baseline bundle it was cut against', () => {
+    expect(prefix).toBe('linux-x64-mbx-v1-dir-layer-rust-0123456789ab-base-')
+    // The baseline's own restore prefix must never reach a layer.
+    expect(prefix.startsWith(generatedRestoreKey('linux', 'x64', 'v1-dir', 'rust-0123456789ab'))).toBe(
+      false
+    )
+    const baseline = baselineIdentity(new TextEncoder().encode('{"version":1}'))
+    expect(baseline).toMatch(/^[0-9a-f]{16}$/)
+    const key = layerKey(prefix, baseline, 42, 3)
+    expect(key).toBe(`${prefix}${baseline}-run-42-3`)
+    expect(layerBaseline(key, prefix)).toBe(baseline)
+  })
+
+  it('names a layer saved without a baseline apart from any baseline', () => {
+    expect(baselineIdentity(undefined)).toBe('none')
+    expect(layerBaseline(layerKey(prefix, 'none', 1, 1), prefix)).toBe('none')
+  })
+
+  it('tells baselines apart by their manifests', () => {
+    expect(baselineIdentity(new TextEncoder().encode('a'))).not.toBe(
+      baselineIdentity(new TextEncoder().encode('b'))
+    )
+  })
+
+  it('reads no baseline from a key it did not write', () => {
+    expect(layerBaseline('linux-x64-mbx-v1-dir-rust-0123456789ab-base', prefix)).toBeUndefined()
+    expect(layerBaseline(`${prefix}not-a-digest-run-1-1`, prefix)).toBeUndefined()
+    expect(layerBaseline(`${prefix}0123456789abcdef`, prefix)).toBeUndefined()
+  })
+
+  it('layers only saving pull requests with directory bundles and generated keys', () => {
+    const run = {
+      save: true,
+      eventName: 'pull_request',
+      mode: 'objects',
+      bundle: 'directory',
+      customKeys: false
+    } as const
+    expect(usesPullRequestLayers(run)).toBe(true)
+    expect(usesPullRequestLayers({...run, save: false})).toBe(false)
+    expect(usesPullRequestLayers({...run, eventName: 'push'})).toBe(false)
+    expect(usesPullRequestLayers({...run, eventName: 'workflow_dispatch'})).toBe(false)
+    expect(usesPullRequestLayers({...run, mode: 'target'})).toBe(false)
+    expect(usesPullRequestLayers({...run, bundle: 'tar'})).toBe(false)
+    expect(usesPullRequestLayers({...run, customKeys: true})).toBe(false)
   })
 })
