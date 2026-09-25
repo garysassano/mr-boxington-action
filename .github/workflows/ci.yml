@@ -55,6 +55,15 @@ jobs:
         # command's failure message would otherwise put in it.
         run: |
           node -e "const k = process.env.PRIMARY_KEY; if (!/-mbx-.+-(rust-[0-9a-f]{12}|norust)-/.test(k)) { console.error('cache key is not scoped by toolchain: ' + k); process.exit(1) }"
+      # This workflow runs on pushes to main and on pull requests, and opts
+      # neither into anything else, so only the push may save.
+      - name: Check the save policy is reported
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SAVE_ELIGIBLE: ${{ steps.mbx.outputs.cache-save-eligible }}
+          SAVE_REASON: ${{ steps.mbx.outputs.cache-save-reason }}
+        run: |
+          node -e "const expected = process.env.EVENT_NAME === 'push' ? 'true' : 'false'; if (process.env.SAVE_ELIGIBLE !== expected || !process.env.SAVE_REASON) { console.error('unexpected save policy: ' + process.env.SAVE_ELIGIBLE + ' (' + process.env.SAVE_REASON + ')'); process.exit(1) }"
       - name: Check native link cache policy
         run: node -e "if ((process.platform === 'linux') !== (process.env.MBX_CACHE_LINKS === '1')) process.exit(1)"
       - name: Check imported objects survive automatic GC

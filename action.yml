@@ -31,6 +31,12 @@ inputs:
   save-on-workflow-dispatch:
     description: Save the GitHub cache after a successful workflow_dispatch run; enable only in trusted workflows
     default: "false"
+  save-on-pull-request:
+    description: Save the GitHub cache after a successful same-repository pull_request run, scoped to that pull request; fork pull requests never save
+    default: "false"
+  save-on-protected-branch:
+    description: Save the GitHub cache after a successful push to a protected non-default branch
+    default: "false"
   toolchain:
     description: Rust toolchain the build names on its own command line, such as "1.91"; the generated cache key follows it instead of the default rustc
     required: false
@@ -64,6 +70,10 @@ outputs:
     description: Whether the exact GitHub cache key was restored
   cache-primary-key:
     description: Primary GitHub cache key used by the action
+  cache-save-eligible:
+    description: Whether the GitHub backend may attempt a save after a successful job; an exact cache hit or an empty payload still skips it
+  cache-save-reason:
+    description: Why the GitHub backend may or may not save, such as "fork pull request"
   mbx-version:
     description: Installed mbx version
 
