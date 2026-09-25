@@ -72,6 +72,15 @@ jobs:
       # phases. Node keeps the harness identical on bash, macOS, and PowerShell.
       - name: Round-trip a real build closure
         run: node .github/e2e/cache-bundle.mjs
+      # This workflow's pull requests never save, so the layered pull request
+      # path cannot run through the action here. The script drives the same
+      # layer code against a real mbx instead, importing the TypeScript
+      # directly, which takes Node 24.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Lay a pull request layer over its baseline
+        run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON .github/e2e/cache-layers.mjs
 
   target:
     strategy:
