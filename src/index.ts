@@ -4,12 +4,13 @@ import * as exec from '@actions/exec'
 import {context} from '@actions/github'
 import * as tc from '@actions/tool-cache'
 import {createHash, randomUUID} from 'node:crypto'
-import {access, chmod, copyFile, mkdir, readFile, stat} from 'node:fs/promises'
+import {access, chmod, copyFile, mkdir, readFile, rm, stat, writeFile} from 'node:fs/promises'
 import {constants} from 'node:fs'
 import {homedir} from 'node:os'
 import path from 'node:path'
 import {
   type BundleForm,
+  baselineIdentity,
   cacheLinksValue,
   cacheRevision,
   canReuseCachedMbx,
@@ -23,6 +24,9 @@ import {
   githubApiHeaders,
   githubTokenValue,
   isEmptyExport,
+  layerBaseline,
+  layerKey,
+  layerRestoreKey,
   mbxReleaseToInstall,
   normalizedVersion,
   parseBackend,
@@ -37,10 +41,18 @@ import {
   savePolicy,
   supportsDirectoryBundle,
   toolchainSegment,
+  usesPullRequestLayers,
   verifiedReleaseAsset,
   type GithubRelease,
   type VerifiedReleaseAsset
 } from './lib.js'
+import {
+  BUNDLE_MANIFEST,
+  bundleObjects,
+  overlayLayer,
+  restoreBaselineManifest,
+  subtractBaseline
+} from './layers.js'
 import {
   dehydrateMbxShimBinaries,
   hasReusableCargoTarget,
@@ -56,12 +68,17 @@ const CACHE_EXPORT_GROUP_STATE = 'mbx-cache-export-group'
 const CACHE_PATHS_STATE = 'mbx-cache-paths'
 const CACHE_BUNDLE_FORM_STATE = 'mbx-cache-bundle-form'
 const CARGO_WORKSPACE_STATE = 'mbx-cargo-workspace'
+const BASELINE_OBJECTS_STATE = 'mbx-baseline-objects'
 const MBX_STATE = 'mbx-bin'
 const CACHE_ARCHIVE_NAME = 'github-actions-cache-v1.tar'
 // A directory rather than a tar. `actions/cache` archives whatever path it is
 // given, so a tar inside its archive means every byte is written twice on
 // restore: once when it unpacks, and again when `mbx cache import` does.
 const CACHE_BUNDLE_NAME = 'github-actions-cache-v1'
+// A pull request's layer is restored beside its baseline, not into it: a
+// different path is also a different cache version, so neither can ever be
+// restored as the other.
+const CACHE_LAYER_NAME = 'github-actions-cache-v1-layer'
 const TARGET_TOOL_DIRECTORY = 'mbx-target-tool'
 
 interface MbxInstallation {
@@ -271,6 +288,112 @@ function configureServer(): void {
   if (audience) core.exportVariable('MBX_REMOTE_OIDC_AUDIENCE', audience)
 }
 
+async function importBundle(mbx: string, bundle: string): Promise<boolean> {
+  return (await exec.exec(mbx, ['cache', 'import', bundle], {ignoreReturnCode: true})) === 0
+}
+
+/** A restored baseline's manifest, or undefined when it is not where expected. */
+async function baselineManifest(baseline: string): Promise<Uint8Array | undefined> {
+  try {
+    return await readFile(path.join(baseline, BUNDLE_MANIFEST))
+  } catch (error) {
+    core.debug(`Could not read the baseline manifest: ${String(error)}`)
+    return undefined
+  }
+}
+
+interface LayeredRestore {
+  primaryKey: string
+  restoredKey?: string
+  /** JSON file listing the baseline's objects, or empty with no baseline. */
+  baselineObjects: string
+  layers: string
+}
+
+/**
+ * Restore the default branch's baseline and this pull request's own layer,
+ * and import them as one bundle.
+ *
+ * The two restores run side by side, so the second lookup costs no wall-clock
+ * time over a single-entry restore. The layer's key names the baseline it was
+ * cut against; one cut against any other baseline is dropped rather than
+ * imported, and one that still fails to import falls back to the baseline
+ * alone.
+ */
+async function restoreLayered(
+  mbx: string,
+  baseline: string,
+  layer: string,
+  baselineKey: string,
+  baselineRestoreKeys: string[],
+  layerPrefix: string,
+  exportGroup: string
+): Promise<LayeredRestore> {
+  const [restoredBaseline, restoredLayer] = await Promise.all([
+    cache.restoreCache([baseline], baselineKey, baselineRestoreKeys),
+    cache.restoreCache([layer], layerPrefix, [layerPrefix])
+  ])
+  const manifest = restoredBaseline ? await baselineManifest(baseline) : undefined
+  if (restoredBaseline && !manifest) {
+    // Not a bundle layout this action knows, so nothing can be laid over it or
+    // left out against it. Import it as it is and save a complete closure.
+    core.warning(`Baseline ${restoredBaseline} has no ${BUNDLE_MANIFEST}; not layering this pull request`)
+    await rm(layer, {recursive: true, force: true})
+    if (!(await importBundle(mbx, baseline))) throw new Error('mbx cache import failed')
+    return {
+      primaryKey: layerKey(layerPrefix, 'none', context.runId, context.runAttempt),
+      restoredKey: restoredBaseline,
+      baselineObjects: '',
+      layers: 'baseline'
+    }
+  }
+  const identity = baselineIdentity(manifest)
+  const primaryKey = layerKey(layerPrefix, identity, context.runId, context.runAttempt)
+  let baselineObjects = ''
+  if (restoredBaseline) {
+    // Listed before anything is laid over it or imported: the post step saves
+    // only what this list lacks, and import consumes the directory.
+    baselineObjects = path.join(
+      process.env.RUNNER_TEMP || path.dirname(baseline),
+      `mbx-baseline-objects-${exportGroup}.json`
+    )
+    await writeFile(baselineObjects, JSON.stringify(await bundleObjects(baseline)))
+    core.info(`Restored mbx baseline from ${restoredBaseline}`)
+  }
+  const fits = restoredLayer !== undefined && layerBaseline(restoredLayer, layerPrefix) === identity
+  if (restoredLayer && !fits) {
+    core.info(`Ignoring pull request layer ${restoredLayer}; it was cut against another baseline`)
+    await rm(layer, {recursive: true, force: true})
+  }
+  if (fits && !restoredBaseline) {
+    if (!(await importBundle(mbx, layer))) throw new Error('mbx cache import failed')
+    return {primaryKey, restoredKey: restoredLayer, baselineObjects, layers: 'pull request layer'}
+  }
+  if (fits && restoredBaseline) {
+    const backup = `${baseline}.manifest`
+    await overlayLayer(baseline, layer, backup)
+    if (await importBundle(mbx, baseline)) {
+      await rm(backup, {force: true})
+      return {
+        primaryKey,
+        restoredKey: restoredLayer,
+        baselineObjects,
+        layers: 'baseline and pull request layer'
+      }
+    }
+    // mbx validates a whole bundle before it publishes any of it, so a
+    // rejected bundle is still intact, and with its own manifest back the
+    // baseline imports on its own.
+    core.warning(`Pull request layer ${restoredLayer} did not fit its baseline; using the baseline alone`)
+    await restoreBaselineManifest(baseline, backup)
+  }
+  if (!restoredBaseline) {
+    return {primaryKey, baselineObjects, layers: 'none'}
+  }
+  if (!(await importBundle(mbx, baseline))) throw new Error('mbx cache import failed')
+  return {primaryKey, restoredKey: restoredBaseline, baselineObjects, layers: 'baseline'}
+}
+
 async function main(): Promise<void> {
   const backend = parseBackend(core.getInput('backend'))
   const githubCacheMode = parseGithubCacheMode(core.getInput('github-cache-mode'))
@@ -388,7 +511,16 @@ async function main(): Promise<void> {
   )
   const baseSha = context.payload.pull_request?.base.sha ?? context.sha
   const sha = cacheRevision(context.eventName, baseSha, save, context.runId, context.runAttempt)
-  const primaryKey =
+  const layered = usesPullRequestLayers({
+    save,
+    eventName: context.eventName,
+    mode: githubCacheMode,
+    bundle: bundleForm,
+    customKeys:
+      Boolean(core.getInput('cache-key')) ||
+      core.getMultilineInput('restore-keys').some(Boolean)
+  })
+  let primaryKey =
     core.getInput('cache-key') ||
     generatedKey(process.platform, process.arch, generation, toolchain, sha)
   const restoreKeys = core.getMultilineInput('restore-keys').filter(Boolean)
@@ -416,8 +548,13 @@ async function main(): Promise<void> {
     path.join(cargoHome, 'git'),
     targetToolDirectory
   ]
+  const layerBundle = path.join(path.dirname(cacheArchive), CACHE_LAYER_NAME)
   const cachePaths = githubCacheMode === 'target' ? targetPaths : [cacheArchive]
-  const restoredKey = await cache.restoreCache(cachePaths, primaryKey, restoreKeys)
+  // A layered pull request restores after mbx is set up, because it has to
+  // look inside its baseline before it can import either bundle.
+  let restoredKey = layered
+    ? undefined
+    : await cache.restoreCache(cachePaths, primaryKey, restoreKeys)
   if (targetCache) {
     installed = await stageTargetCacheMbx(
       await setupMbx(core.getInput('version'), githubToken, targetToolDirectory),
@@ -429,7 +566,20 @@ async function main(): Promise<void> {
   core.setOutput('mbx-version', installed.version)
   core.saveState(POST_STATE, backend)
   core.saveState(MBX_STATE, installed.bin)
-  if (restoredKey && githubCacheMode === 'objects') {
+  let layers = ''
+  let baselineObjects = ''
+  if (layered) {
+    const restored = await restoreLayered(
+      installed.bin,
+      cacheArchive,
+      layerBundle,
+      generatedKey(process.platform, process.arch, generation, toolchain, baseSha),
+      [generatedRestoreKey(process.platform, process.arch, generation, toolchain)],
+      layerRestoreKey(process.platform, process.arch, generation, toolchain, baseSha),
+      exportGroup
+    )
+    ;({primaryKey, restoredKey, layers, baselineObjects} = restored)
+  } else if (restoredKey && githubCacheMode === 'objects') {
     await exec.exec(installed.bin, ['cache', 'import', cacheArchive])
   } else if (restoredKey && githubCacheMode === 'target') {
     const hydrated = await hydrateMbxShimBinaries(targetDirectory, installed.bin)
@@ -440,7 +590,10 @@ async function main(): Promise<void> {
   core.setOutput('cache-primary-key', primaryKey)
   core.info(restoredKey ? `Restored mbx cache from ${restoredKey}` : 'No mbx cache found')
 
-  core.saveState(CACHE_ARCHIVE_STATE, cacheArchive)
+  // A layered pull request exports to its layer's path: the save has to name
+  // the path its restore did, or the two would be different cache versions.
+  core.saveState(CACHE_ARCHIVE_STATE, layered ? layerBundle : cacheArchive)
+  core.saveState(BASELINE_OBJECTS_STATE, baselineObjects)
   core.saveState(CACHE_BUNDLE_FORM_STATE, bundleForm)
   core.saveState(CACHE_EXPORT_GROUP_STATE, exportGroup)
   core.saveState(CACHE_PATHS_STATE, JSON.stringify(cachePaths))
@@ -477,6 +630,7 @@ async function main(): Promise<void> {
             : 'mbx objects (tar)'
     },
     {label: 'Cache', value: cacheResult},
+    ...(layered ? [{label: 'Layers', value: layers}] : []),
     {
       label: 'Policy',
       value: save
@@ -533,6 +687,14 @@ async function post(): Promise<void> {
       return
     }
     throw new Error(`mbx cache export exited with code ${exportExitCode}`)
+  }
+  const baselineObjects = core.getState(BASELINE_OBJECTS_STATE)
+  if (baselineObjects) {
+    const baseline = new Set(JSON.parse(await readFile(baselineObjects, 'utf8')) as string[])
+    const left = await subtractBaseline(archive, baseline)
+    core.info(
+      `Left ${left.objects} objects (${left.bytes} bytes) that the baseline already holds out of the pull request layer`
+    )
   }
   const cacheId = await cache.saveCache([archive], primaryKey)
   core.info(`Saved mbx cache ${primaryKey} (ID ${cacheId})`)
