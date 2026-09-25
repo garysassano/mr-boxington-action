@@ -1,0 +1,38 @@
+# Throwaway: which entry does GitHub's cache service pick for each restore-key list?
+name: probe
+on:
+  pull_request:
+    branches: [bench/l2-base]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - name: run-prefix-only
+            keys: |
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-0df59a0d0eade0219cc8ff061fe64bda39037aba-run-
+          - name: run-prefix-then-base-exact
+            keys: |
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-0df59a0d0eade0219cc8ff061fe64bda39037aba-run-
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-0df59a0d0eade0219cc8ff061fe64bda39037aba
+          - name: generic-prefix-only
+            keys: |
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-
+          - name: run-prefix-then-generic
+            keys: |
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-0df59a0d0eade0219cc8ff061fe64bda39037aba-run-
+              linux-x64-mbx-bench2-single-dir-rust-39d372ba6fa2-
+    name: probe (${{ matrix.case.name }})
+    steps:
+      - id: lookup
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/runner/.cache/mbx/actions/github-actions-cache-v1
+          key: probe-never-matches
+          restore-keys: ${{ matrix.case.keys }}
+          lookup-only: true
+      - run: echo "matched=${{ steps.lookup.outputs.cache-matched-key }}"
