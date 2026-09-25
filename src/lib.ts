@@ -188,6 +188,28 @@ export function generatedRestoreKey(
 }
 
 /**
+ * Restore keys that lead a saving pull request back to its own latest entry.
+ *
+ * Its primary key is unique to the run, so it never matches. GitHub's cache
+ * service takes an exact match of a restore key ahead of prefix matches for
+ * it, even in a scope searched later: asking for the base commit's key first
+ * restores the base branch's entry on every revision and never this pull
+ * request's own. The `-run-` prefix cannot match any entry exactly, so it
+ * reaches this pull request's runs on the same base first, which GitHub finds
+ * in the pull request's own scope; the base commit's entry is next.
+ */
+export function pullRequestRestoreKeys(
+  os: string,
+  arch: string,
+  generation: string,
+  toolchain: string,
+  baseSha: string
+): string[] {
+  const base = generatedKey(os, arch, generation, toolchain, baseSha)
+  return [`${base}-run-`, base]
+}
+
+/**
  * Whether an installed mbx can read and write directory-form bundles.
  *
  * `mbx cache export --format directory` arrived in mbx 1.12.0, and an older

@@ -18,6 +18,7 @@ import {
   parseBackend,
   parseGithubCacheMode,
   parsedMbxVersion,
+  pullRequestRestoreKeys,
   requireGithubCacheRuntime,
   releaseTarget,
   rustcIdentityArgs,
@@ -204,6 +205,16 @@ describe('inputs', () => {
     )
     expect(githubCacheGeneration('v2', 'objects')).toBe('v2')
     expect(githubCacheGeneration('v2', 'target')).toBe('v2-target')
+  })
+
+  it("asks for a saving pull request's own runs before its base commit", () => {
+    const base = generatedKey('linux', 'x64', 'v2', 'rust-0123456789ab', 'abc')
+    const keys = pullRequestRestoreKeys('linux', 'x64', 'v2', 'rust-0123456789ab', 'abc')
+    // An exact match on the base commit's key would win over this pull
+    // request's own entries, so the first key must not equal any saved key.
+    expect(keys).toEqual([`${base}-run-`, base])
+    expect(`${base}-run-42-1`.startsWith(keys[0] ?? '')).toBe(true)
+    expect(base.startsWith(keys[0] ?? '')).toBe(false)
   })
 
   it('keeps a directory bundle out of the tar key space', () => {
