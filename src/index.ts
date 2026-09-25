@@ -28,6 +28,7 @@ import {
   parseBackend,
   parseGithubCacheMode,
   parsedMbxVersion,
+  pullRequestRestoreKey,
   type PullRequestRepositories,
   requireGithubCacheRuntime,
   releaseTarget,
@@ -392,12 +393,10 @@ async function main(): Promise<void> {
     generatedKey(process.platform, process.arch, generation, toolchain, sha)
   const restoreKeys = core.getMultilineInput('restore-keys').filter(Boolean)
   if (restoreKeys.length === 0) {
-    // A saving pull request keys each run apart, so its primary key never
-    // matches the entry its base commit saved. Ask for that commit first; the
-    // prefix also matches this pull request's own earlier runs on that base,
-    // which GitHub finds first because they share its scope.
     if (save && context.eventName === 'pull_request') {
-      restoreKeys.push(generatedKey(process.platform, process.arch, generation, toolchain, baseSha))
+      restoreKeys.push(
+        pullRequestRestoreKey(process.platform, process.arch, generation, toolchain, baseSha)
+      )
     }
     restoreKeys.push(generatedRestoreKey(process.platform, process.arch, generation, toolchain))
   }
