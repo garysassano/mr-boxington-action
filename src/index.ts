@@ -28,10 +28,12 @@ import {
   parseBackend,
   parseGithubCacheMode,
   parsedMbxVersion,
+  type PullRequestRepositories,
   requireGithubCacheRuntime,
   releaseTarget,
   rustcIdentityArgs,
-  shouldSave,
+  isSameRepositoryPullRequest,
+  savePolicy,
   supportsDirectoryBundle,
   toolchainSegment,
   verifiedReleaseAsset,
@@ -364,19 +366,38 @@ async function main(): Promise<void> {
       )
     }
   }
-  const saveOnWorkflowDispatch = core.getBooleanInput('save-on-workflow-dispatch')
-  const sha = cacheRevision(
-    context.eventName,
-    context.payload.pull_request?.base.sha ?? context.sha,
-    saveOnWorkflowDispatch,
-    context.runId,
-    context.runAttempt
+  const defaultBranch = (context.payload.repository as {default_branch?: string} | undefined)
+    ?.default_branch
+  const {save, reason: saveReason} = savePolicy(
+    {
+      eventName: context.eventName,
+      ref: context.ref,
+      defaultBranch,
+      refProtected: process.env.GITHUB_REF_PROTECTED === 'true',
+      sameRepository: isSameRepositoryPullRequest(
+        context.payload.pull_request as PullRequestRepositories | undefined
+      )
+    },
+    {
+      workflowDispatch: core.getBooleanInput('save-on-workflow-dispatch'),
+      pullRequest: core.getBooleanInput('save-on-pull-request'),
+      protectedBranch: core.getBooleanInput('save-on-protected-branch')
+    }
   )
+  const baseSha = context.payload.pull_request?.base.sha ?? context.sha
+  const sha = cacheRevision(context.eventName, baseSha, save, context.runId, context.runAttempt)
   const primaryKey =
     core.getInput('cache-key') ||
     generatedKey(process.platform, process.arch, generation, toolchain, sha)
   const restoreKeys = core.getMultilineInput('restore-keys').filter(Boolean)
   if (restoreKeys.length === 0) {
+    // A saving pull request keys each run apart, so its primary key never
+    // matches the entry its base commit saved. Ask for that commit first; the
+    // prefix also matches this pull request's own earlier runs on that base,
+    // which GitHub finds first because they share its scope.
+    if (save && context.eventName === 'pull_request') {
+      restoreKeys.push(generatedKey(process.platform, process.arch, generation, toolchain, baseSha))
+    }
     restoreKeys.push(generatedRestoreKey(process.platform, process.arch, generation, toolchain))
   }
   const cargoHome = process.env.CARGO_HOME || path.join(homedir(), '.cargo')
@@ -426,17 +447,16 @@ async function main(): Promise<void> {
   core.saveState(CARGO_WORKSPACE_STATE, cargoWorkspace)
   core.saveState(CACHE_KEY_STATE, primaryKey)
   core.saveState(CACHE_HIT_STATE, hit ? 'true' : 'false')
-  const defaultBranch = (context.payload.repository as {default_branch?: string} | undefined)
-    ?.default_branch
-  const save = shouldSave(
-    context.eventName,
-    context.ref,
-    defaultBranch,
-    saveOnWorkflowDispatch
-  )
   core.saveState(
     POST_STATE,
     save ? 'github-save' : 'github-restore-only'
+  )
+  core.setOutput('cache-save-eligible', save ? 'true' : 'false')
+  core.setOutput('cache-save-reason', saveReason)
+  core.info(
+    save
+      ? `Will save the mbx cache after a successful job (${saveReason})`
+      : `Restore only (${saveReason})`
   )
   const cacheResult = hit ? 'exact hit' : restoredKey ? 'warm start' : 'miss'
   const note = hit
@@ -457,7 +477,12 @@ async function main(): Promise<void> {
             : 'mbx objects (tar)'
     },
     {label: 'Cache', value: cacheResult},
-    {label: 'Policy', value: save ? 'save after a successful job' : 'restore only'}
+    {
+      label: 'Policy',
+      value: save
+        ? `save after a successful job (${saveReason})`
+        : `restore only (${saveReason})`
+    }
   ])
 }
 

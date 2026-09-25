@@ -264,33 +264,84 @@ export function toolchainSegment(rustcIdentity: string | null): string {
 }
 
 /**
- * Give saving dispatches a fresh primary key so GitHub's immutable cache can
- * preserve state learned after restoring the previous compatible dispatch.
+ * Give saving runs other than pushes a fresh primary key. A dispatch or a pull
+ * request can save many times against one commit, and GitHub's immutable cache
+ * would otherwise keep only the first entry and drop what later runs learned
+ * after restoring it.
  */
 export function cacheRevision(
   eventName: string,
   sha: string,
-  saveOnWorkflowDispatch: boolean,
+  save: boolean,
   runId: number,
   runAttempt: number
 ): string {
-  return eventName === 'workflow_dispatch' && saveOnWorkflowDispatch
-    ? `${sha}-run-${runId}-${runAttempt}`
-    : sha
+  return save && eventName !== 'push' ? `${sha}-run-${runId}-${runAttempt}` : sha
 }
 
-export function shouldSave(
-  eventName: string,
-  ref: string,
-  defaultBranch?: string | null,
-  saveOnWorkflowDispatch = false
-): boolean {
-  if (eventName === 'workflow_dispatch') return saveOnWorkflowDispatch
-  return Boolean(
-    eventName === 'push' &&
-      defaultBranch &&
-      ref === `refs/heads/${defaultBranch}`
-  )
+export interface SaveOptions {
+  workflowDispatch?: boolean
+  pullRequest?: boolean
+  protectedBranch?: boolean
+}
+
+export interface SaveContext {
+  eventName: string
+  ref: string
+  defaultBranch?: string | null
+  /** `GITHUB_REF_PROTECTED`: the ref has branch protection or rulesets. */
+  refProtected?: boolean
+  /** Whether a pull request's head branch lives in the base repository. */
+  sameRepository?: boolean
+}
+
+export interface SaveDecision {
+  save: boolean
+  reason: string
+}
+
+/**
+ * Whether a successful job saves the GitHub cache, and why.
+ *
+ * Default-branch pushes always save. Protected-branch pushes, same-repository
+ * pull requests, and dispatches save only when opted in. A fork pull request
+ * never saves: GitHub would accept its write into the pull request's own
+ * scope, but nothing about the run is trusted.
+ */
+export function savePolicy(run: SaveContext, options: SaveOptions = {}): SaveDecision {
+  const {eventName, ref, defaultBranch} = run
+  if (eventName === 'push' && ref.startsWith('refs/heads/')) {
+    if (defaultBranch && ref === `refs/heads/${defaultBranch}`) {
+      return {save: true, reason: 'default-branch push'}
+    }
+    if (!run.refProtected) return {save: false, reason: 'unprotected-branch push'}
+    return options.protectedBranch
+      ? {save: true, reason: 'protected-branch push'}
+      : {save: false, reason: 'protected-branch push; save-on-protected-branch is off'}
+  }
+  if (eventName === 'pull_request') {
+    if (!run.sameRepository) return {save: false, reason: 'fork pull request'}
+    return options.pullRequest
+      ? {save: true, reason: 'same-repository pull request'}
+      : {save: false, reason: 'pull request; save-on-pull-request is off'}
+  }
+  if (eventName === 'workflow_dispatch') {
+    return options.workflowDispatch
+      ? {save: true, reason: 'workflow_dispatch'}
+      : {save: false, reason: 'workflow_dispatch; save-on-workflow-dispatch is off'}
+  }
+  return {save: false, reason: `${eventName} event`}
+}
+
+export interface PullRequestRepositories {
+  head?: {repo?: {full_name?: string} | null}
+  base?: {repo?: {full_name?: string} | null}
+}
+
+/** A pull request whose head repository is gone is treated as a fork. */
+export function isSameRepositoryPullRequest(pullRequest?: PullRequestRepositories): boolean {
+  const head = pullRequest?.head?.repo?.full_name
+  return Boolean(head && head === pullRequest?.base?.repo?.full_name)
 }
 
 /**
