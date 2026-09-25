@@ -374,6 +374,7 @@ async function main(): Promise<void> {
       ref: context.ref,
       defaultBranch,
       refProtected: process.env.GITHUB_REF_PROTECTED === 'true',
+      cacheMode: process.env.ACTIONS_CACHE_MODE,
       sameRepository: isSameRepositoryPullRequest(
         context.payload.pull_request as PullRequestRepositories | undefined
       )

@@ -157,13 +157,27 @@ By default each pull request restores the default branch's baseline and throws a
     save-on-protected-branch: true
 ```
 
-- `save-on-pull-request` saves successful `pull_request` runs whose head branch is in the same repository. GitHub scopes a pull request's cache entries to its merge ref (`refs/pull/<number>/merge`), so they are restored only by later runs of that pull request, never by the default branch, sibling pull requests, or other branches. Each saving run writes a new key. It restores the pull request's own latest entry when there is one, preferring one saved on the same base commit, and otherwise the entry saved for its base commit, so `cache-hit` is `false` on these runs. Fork pull requests and `pull_request_target` runs never save.
+- `save-on-pull-request` saves successful `pull_request` runs whose head branch is in the same repository. GitHub scopes a pull request's cache entries to its merge ref (`refs/pull/<number>/merge`), so they are restored only by later runs of that pull request, never by the default branch, sibling pull requests, or other branches. Each saving run writes a new key. It restores the pull request's own latest entry when there is one, preferring one saved on the same base commit, and otherwise the entry saved for its base commit, so `cache-hit` is `false` on these runs. Fork pull requests, `pull_request_target` runs, and the `closed` run of a merged pull request (which GitHub reports on the branch it merged into) never save.
 - `save-on-protected-branch` saves successful pushes to any non-default branch that has branch protection or rulesets (`GITHUB_REF_PROTECTED`), the same rule mbx applies when it decides whether a run may write to a cache server. Later pushes to that branch and pull requests that target it restore those entries.
 - `save-on-workflow-dispatch` saves successful `workflow_dispatch` runs; see [Inputs](#inputs).
 
 Every saved entry counts against the repository's cache storage limit (10 GB by default), and GitHub evicts the least recently used entries once it is exceeded. Pull requests that save a large `target` tree on every revision can push the default branch's baseline out; deleting a pull request's entries when it closes with `gh cache delete --all --ref refs/pull/<number>/merge` keeps that in check.
 
-The `cache-save-eligible` and `cache-save-reason` outputs say whether a run will save and why, for example `same-repository pull request` or `fork pull request`.
+A job whose `cache-mode` does not permit writes (`read` or `none`, set in the workflow or by GitHub's default for the trigger) never saves, whatever these inputs say.
+
+An explicit `cache-key` is used as given, so saving pull requests and dispatches do not get a fresh key per run. With a constant `cache-key`, the second revision restores the first one's entry as an exact hit and skips its save. Give the key a per-run suffix and a matching restore prefix:
+
+```yaml
+- uses: jdx/mr-boxington-action@v1
+  with:
+    save-on-pull-request: true
+    cache-key: my-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    restore-keys: my-build-
+```
+
+To keep one workflow's entries apart from another's, changing `cache-generation` is simpler and keeps the generated keys.
+
+The `cache-save-eligible` and `cache-save-reason` outputs say whether a run may attempt a save and why, for example `same-repository pull request` or `fork pull request`. An eligible run still skips the save after an exact cache hit or when the job produced nothing to cache.
 
 ## Cache server
 
@@ -237,9 +251,8 @@ a new immutable key for the next dispatch.
 - `mbx-version` — installed version.
 - `cache-hit` — `true` for an exact GitHub cache-key match.
 - `cache-primary-key` — key used by the GitHub backend.
-- `cache-save-eligible` — `true` when the GitHub backend will save after a
-  successful job.
-- `cache-save-reason` — why the GitHub backend will or will not save.
+- `cache-save-eligible` — `true` when the GitHub backend may attempt a save after a successful job.
+- `cache-save-reason` — why the GitHub backend may or may not save.
 
 ## License
 

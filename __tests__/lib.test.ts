@@ -21,6 +21,7 @@ import {
   requireGithubCacheRuntime,
   releaseTarget,
   rustcIdentityArgs,
+  cacheModePermitsWrites,
   isSameRepositoryPullRequest,
   savePolicy,
   supportsDirectoryBundle,
@@ -308,6 +309,8 @@ describe('save policy', () => {
     expect(saves('pull_request', 'refs/pull/1/merge', {sameRepository: true}, options)).toBe(true)
     expect(saves('pull_request', 'refs/pull/1/merge', {sameRepository: false}, options)).toBe(false)
     expect(saves('pull_request_target', 'refs/heads/main', {sameRepository: true}, options)).toBe(false)
+    // A merged pull request's `closed` run reports the branch it merged into.
+    expect(saves('pull_request', 'refs/heads/release', {sameRepository: true}, options)).toBe(false)
     expect(saves('push', 'refs/heads/topic', {}, options)).toBe(false)
   })
 
@@ -317,6 +320,24 @@ describe('save policy', () => {
     expect(saves('push', 'refs/heads/topic', {refProtected: false}, options)).toBe(false)
     expect(saves('push', 'refs/tags/v1.0.0', {refProtected: true}, options)).toBe(false)
     expect(saves('pull_request', 'refs/pull/1/merge', {refProtected: true, sameRepository: true}, options)).toBe(false)
+  })
+
+  it('respects the cache-mode GitHub granted the job', () => {
+    const run = {eventName: 'push', ref: 'refs/heads/main', defaultBranch: 'main'}
+    expect(savePolicy({...run, cacheMode: 'read'})).toEqual({
+      save: false,
+      reason: 'default-branch push; cache-mode read does not permit writes'
+    })
+    expect(savePolicy({...run, cacheMode: 'none'}).save).toBe(false)
+    expect(savePolicy({...run, cacheMode: 'write'}).save).toBe(true)
+    expect(savePolicy({...run, cacheMode: 'write-only'}).save).toBe(true)
+    expect(savePolicy({...run, cacheMode: ''}).save).toBe(true)
+    expect(savePolicy({...run, cacheMode: 'future-mode'}).save).toBe(true)
+    expect(savePolicy({...run, ref: 'refs/heads/topic', cacheMode: 'read'}).reason).toBe(
+      'unprotected-branch push'
+    )
+    expect(savePolicy({...run, cacheMode: ' READ '}).save).toBe(false)
+    expect(cacheModePermitsWrites('read')).toBe(false)
   })
 
   it('explains each decision', () => {
@@ -329,6 +350,9 @@ describe('save policy', () => {
       'pull request; save-on-pull-request is off'
     )
     expect(reason('schedule', 'refs/heads/main')).toBe('schedule event')
+    expect(
+      reason('pull_request', 'refs/heads/main', {sameRepository: true}, {pullRequest: true})
+    ).toBe('pull request outside its merge ref')
   })
 
   it('treats a pull request as a fork unless its head is in the base repository', () => {

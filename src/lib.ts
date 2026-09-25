@@ -293,6 +293,8 @@ export interface SaveContext {
   refProtected?: boolean
   /** Whether a pull request's head branch lives in the base repository. */
   sameRepository?: boolean
+  /** `ACTIONS_CACHE_MODE`: the cache access GitHub granted this job. */
+  cacheMode?: string
 }
 
 export interface SaveDecision {
@@ -307,8 +309,30 @@ export interface SaveDecision {
  * pull requests, and dispatches save only when opted in. A fork pull request
  * never saves: GitHub would accept its write into the pull request's own
  * scope, but nothing about the run is trusted.
+ *
+ * A save the policy allows is still skipped when GitHub's `cache-mode` for
+ * the job denies writes, so the decision says so up front instead of pruning
+ * and exporting a payload the cache library would then drop.
  */
 export function savePolicy(run: SaveContext, options: SaveOptions = {}): SaveDecision {
+  const decision = eventSavePolicy(run, options)
+  const mode = run.cacheMode?.trim().toLowerCase() ?? ''
+  if (decision.save && !cacheModePermitsWrites(mode)) {
+    return {save: false, reason: `${decision.reason}; cache-mode ${mode} does not permit writes`}
+  }
+  return decision
+}
+
+/**
+ * The same lattice `@actions/cache` applies: an unset or unrecognized mode is
+ * permissive, so runners that do not export one keep today's behavior.
+ */
+export function cacheModePermitsWrites(mode: string): boolean {
+  if (!['none', 'read', 'write', 'write-only'].includes(mode)) return true
+  return mode === 'write' || mode === 'write-only'
+}
+
+function eventSavePolicy(run: SaveContext, options: SaveOptions): SaveDecision {
   const {eventName, ref, defaultBranch} = run
   if (eventName === 'push' && ref.startsWith('refs/heads/')) {
     if (defaultBranch && ref === `refs/heads/${defaultBranch}`) {
@@ -321,6 +345,11 @@ export function savePolicy(run: SaveContext, options: SaveOptions = {}): SaveDec
   }
   if (eventName === 'pull_request') {
     if (!run.sameRepository) return {save: false, reason: 'fork pull request'}
+    // Once a pull request is merged, its `closed` run reports the branch it
+    // merged into, and a save there would land in that branch's scope.
+    if (!/^refs\/pull\/\d+\/merge$/.test(ref)) {
+      return {save: false, reason: 'pull request outside its merge ref'}
+    }
     return options.pullRequest
       ? {save: true, reason: 'same-repository pull request'}
       : {save: false, reason: 'pull request; save-on-pull-request is off'}

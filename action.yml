@@ -71,9 +71,9 @@ outputs:
   cache-primary-key:
     description: Primary GitHub cache key used by the action
   cache-save-eligible:
-    description: Whether the GitHub backend will save after a successful job
+    description: Whether the GitHub backend may attempt a save after a successful job; an exact cache hit or an empty payload still skips it
   cache-save-reason:
-    description: Why the GitHub backend will or will not save, such as "fork pull request"
+    description: Why the GitHub backend may or may not save, such as "fork pull request"
   mbx-version:
     description: Installed mbx version
 
