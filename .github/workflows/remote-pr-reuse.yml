@@ -1,0 +1,68 @@
+# Throwaway experiment: does a remote cache plus the GitHub backend's
+# pull-request save let a pull request reuse its own builds?
+name: remote-pr-reuse
+
+on:
+  pull_request:
+    branches: [bench/rr-base]
+
+permissions:
+  contents: read
+
+env:
+  # A local S3-compatible server stands in for the team's bucket.
+  MBX_REMOTE_S3_ENDPOINT: http://127.0.0.1:9000
+  MBX_REMOTE_S3_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: throwaway
+  AWS_SECRET_ACCESS_KEY: throwaway-secret
+  AWS_REGION: us-east-1
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [remote-only, remote-plus-github]
+    runs-on: ubuntu-latest
+    name: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Start the bucket
+        run: |
+          docker run -d --name s3 -p 127.0.0.1:9000:7070 \
+            -e ROOT_ACCESS_KEY="$AWS_ACCESS_KEY_ID" -e ROOT_SECRET_KEY="$AWS_SECRET_ACCESS_KEY" \
+            versity/versitygw:latest posix /tmp
+          until aws --endpoint-url "$MBX_REMOTE_S3_ENDPOINT" s3 mb s3://mbx-cache; do sleep 1; done
+      - name: mbx (GitHub backend, pull request saves)
+        if: matrix.variant == 'remote-plus-github'
+        uses: jdx/mr-boxington-action@7871f38a7d8645f04c71476bb143300fe212d103
+        with:
+          version: 1.17.0
+          github-cache-mode: objects
+          cache-generation: rr
+          save-on-pull-request: true
+      - name: mbx (remote)
+        uses: jdx/mr-boxington-action@7871f38a7d8645f04c71476bb143300fe212d103
+        with:
+          version: 1.17.0
+          backend: server
+          server-url: s3://mbx-cache
+          namespace: acme/bench
+      # Stand-in for main's protected pushes filling the bucket: build the base
+      # commit in its own store as a trusted writer. GitHub ignores GITHUB_*
+      # overrides in `env:`, so they are set on the command itself.
+      - name: Seed the bucket from the base commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          cd "$RUNNER_TEMP/base"
+          GITHUB_EVENT_NAME=push GITHUB_REF_TYPE=branch GITHUB_REF_PROTECTED=true \
+          MBX_CACHE_DIR="$RUNNER_TEMP/seed-store" MBX_TARGET_ROOT="$RUNNER_TEMP/seed-targets" \
+          MBX_CACHE_EXPORT_GROUP=seed \
+            mbx build --workspace --locked 2>&1 | grep 'mbx\[cache\]: object'
+      - name: build
+        run: mbx build --workspace --locked
