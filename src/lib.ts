@@ -211,21 +211,23 @@ export function pullRequestRestoreKey(
 }
 
 /**
- * Prefix of every cache layer a pull request saves on one base commit.
+ * Prefix of every cache layer a pull request saves.
  *
  * A layer holds only what its baseline bundle lacks, so it is useless without
- * that baseline. The base commit narrows the search to layers cut against the
- * default branch's current entry, and `layerKey` then names the exact baseline
- * bundle, which `layerBaseline` reads back to check a restored layer fits.
+ * that baseline, and `layerKey` names the exact baseline bundle it was cut
+ * against. The base commit is left out on purpose: a pull request's base moves
+ * with every push to its base branch, often while the baseline it restores
+ * stays the same, and a layer that still fits that baseline should survive.
+ * GitHub finds the newest layer in the pull request's own scope first, and
+ * `layerBaseline` reads back whether it fits the baseline this run restored.
  */
 export function layerRestoreKey(
   os: string,
   arch: string,
   generation: string,
-  toolchain: string,
-  baseSha: string
+  toolchain: string
 ): string {
-  return `${os}-${arch}-mbx-${generation}-layer-${toolchain}-${baseSha}-`
+  return `${os}-${arch}-mbx-${generation}-layer-${toolchain}-`
 }
 
 /** A run-unique key for a layer cut against the baseline named by `baseline`. */

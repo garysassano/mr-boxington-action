@@ -575,7 +575,7 @@ async function main(): Promise<void> {
       layerBundle,
       generatedKey(process.platform, process.arch, generation, toolchain, baseSha),
       [generatedRestoreKey(process.platform, process.arch, generation, toolchain)],
-      layerRestoreKey(process.platform, process.arch, generation, toolchain, baseSha),
+      layerRestoreKey(process.platform, process.arch, generation, toolchain),
       exportGroup
     )
     ;({primaryKey, restoredKey, layers, baselineObjects} = restored)
