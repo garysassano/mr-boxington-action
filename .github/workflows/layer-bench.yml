@@ -1,0 +1,46 @@
+# Throwaway benchmark: single-entry pull request caches against layered ones.
+name: layer-bench
+
+on:
+  push:
+    branches: [bench/l3-base]
+  pull_request:
+    branches: [bench/l3-base]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [single, layered]
+    runs-on: ubuntu-latest
+    name: bench (${{ matrix.variant }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # main plus the restore-order fix: a single entry that restores its own
+      # previous revision.
+      - name: mbx (single)
+        if: matrix.variant == 'single'
+        uses: garysassano/mr-boxington-action@eb76046135db19ad00fdfa0f4e19e2d586174f1c
+        with:
+          version: 1.17.0
+          github-cache-mode: objects
+          cache-generation: bench3-single
+          save-on-pull-request: true
+          save-on-protected-branch: true
+      - name: mbx (layered)
+        if: matrix.variant == 'layered'
+        uses: ./
+        with:
+          version: 1.17.0
+          github-cache-mode: objects
+          cache-generation: bench3-layered
+          save-on-pull-request: true
+          save-on-protected-branch: true
+      - name: build
+        run: mbx build --workspace --locked
