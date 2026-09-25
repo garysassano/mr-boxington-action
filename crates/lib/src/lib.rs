@@ -13,3 +13,7 @@ pub fn parse(s: &str) -> Item {
 pub fn router() -> axum::Router {
     axum::Router::new().route("/", axum::routing::get(|| async { "ok" }))
 }
+
+pub fn revision() -> u64 {
+    1
+}
