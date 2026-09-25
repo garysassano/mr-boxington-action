@@ -2,7 +2,8 @@
 name: layer-bench
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [bench/layered-cache-base]
   pull_request:
     branches: [bench/layered-cache-base]
 
@@ -29,7 +30,7 @@ jobs:
           github-cache-mode: objects
           cache-generation: bench-single
           save-on-pull-request: true
-          save-on-workflow-dispatch: true
+          save-on-protected-branch: true
       - name: mbx (layered)
         if: matrix.variant == 'layered'
         uses: ./
@@ -38,6 +39,6 @@ jobs:
           github-cache-mode: objects
           cache-generation: bench-layered
           save-on-pull-request: true
-          save-on-workflow-dispatch: true
+          save-on-protected-branch: true
       - name: build
         run: mbx build --workspace --locked
