@@ -62,6 +62,18 @@ describe('pull request cache layers', () => {
     ])
   })
 
+  it('counts every byte it leaves out when removing concurrently', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'mbx-layers-'))
+    const shared = Object.fromEntries(
+      Array.from({length: 64}, (_, index) => [`cas/v1/${index % 8}/object-${index}`, 'x'.repeat(100)])
+    )
+    const exported = await bundle(root, 'export', {[BUNDLE_MANIFEST]: 'layer', ...shared})
+    const baseline = new Set(Object.keys(shared).map(native))
+
+    expect(await subtractBaseline(exported, baseline)).toEqual({objects: 64, bytes: 6400})
+    expect(await files(exported)).toEqual([BUNDLE_MANIFEST])
+  })
+
   it('lists no objects for a bundle without any', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'mbx-layers-'))
     expect(await bundleObjects(path.join(root, 'missing'))).toEqual([])

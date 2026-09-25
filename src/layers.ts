@@ -112,7 +112,10 @@ export async function subtractBaseline(
   let bytes = 0
   await eachConcurrently(shared, async relative => {
     const file = path.join(bundle, relative)
-    bytes += (await stat(file)).size
+    // Await the size before touching the total: `bytes += await …` reads the
+    // total first, so concurrent removals would overwrite each other's sums.
+    const {size} = await stat(file)
+    bytes += size
     await rm(file)
   })
   return {objects: shared.length, bytes}
